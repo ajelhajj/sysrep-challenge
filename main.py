@@ -23,7 +23,7 @@ def get_tax_rate(state):
 
 def write_new_file(aggregated_data_frame: pd.DataFrame, report_date: str):
     """Writes the aggregated datadrame to an xlsx file with the report date in the filename.""" 
-    aggregated_data_frame.to_excel(f'aggregated_report-{report_date}.xlsx')
+    aggregated_data_frame.to_excel(f'aggregated_report-{report_date}.xlsx', index = False)
     return
 
 def fix_data_entry_mistakes(df): 
@@ -50,8 +50,7 @@ def report_str_datetime(report_date):
 
 def calc_earned_premium(df, report_date):
     """Create calculated column for earned premium."""
-    # calc_pro_rata_gwp(df) # dependency on this function b/c we need 'Effective Days' column and we don't want to recalculate
-
+    report_date = report_str_datetime(report_date) # convert to datetime object
     # report date may fall before effective date, after effective date but before expiration, or after expiration
     # handle all cases appropriately to calclate current days effective:
     conds = [(report_date <= df['Effective Date']),
@@ -68,6 +67,7 @@ def calc_earned_premium(df, report_date):
 
 def calc_unearned_premium(df, report_date):
     """Create calculated column for unearned premium."""
+    report_date = report_str_datetime(report_date) # convert to datetime object
     conds = [(report_date <= df['Effective Date']),
              ((report_date < df['Expiration Date']) & (report_date > df['Effective Date'])),
              (report_date >= df['Expiration Date'])]
@@ -89,54 +89,61 @@ def calc_taxes(df):
     df['Taxes'] = np.select(conds, choice)
     return
 
-def report_date(df, report_date):
-    """Create column in second position to store report_date."""
-    df['Report Date'] = report_date
-    return
-
-# def aggregate_company(df):
-#     """Aggregate by Company Name to count number of vehicles/VINs and sum vehicle pro-rata GWP, earned premium, unearned premium, and taxes."""
-#     df.groupby('Company Name')['Fee'].agg(['sum','count'])
-    
-#     names = {
-#         'Total_Count': x['Type'].count(),
-#         'Total_Number': x['Number'].sum(),
-#         'Count_Status=Y': x[x['Status']=='Y']['Type'].count(),
-#         'Number_Status=Y': x[x['Status']=='Y']['Number'].sum(),
-#         'Count_Status=N': x[x['Status']=='N']['Type'].count(),
-#         'Number_Status=N': x[x['Status']=='N']['Number'].sum()}
-
-#     return pd.Series(names)
-
-# df.groupby('Type').apply(my_agg)
-
 def company_agg(x):
+    """ Create rules to apply to columns and generate count/sum columns."""
     names = {
         'Total Count of Vehicles': x['VIN'].count(),
         'Total Annual GWP': x['Annual GWP'].sum(),
-        'Total Pro_Rata GWP': x['Pro-Rata GWP'].sum(),
+        'Total Pro-Rata GWP': x['Pro-Rata GWP'].sum(),
         'Total Earned Premium': x['Earned Premium'].sum(),
         'Total Unearned Premium': x['Unearned Premium'].sum(),
-        'Total Taxes': x['Total Taxes'].sum()
+        'Total Taxes': x['Taxes'].sum()
         }
     return pd.Series(names)
     
 def aggregate(df):
-    df = df.groupby('Company Name').apply(company_agg)
+    """Groupby company name and apply company_agg function to produce count and sum columns."""
+    df = df.groupby('Company Name').apply(company_agg).reset_index()
+    return df
+    
+
+def report_date_col(df, report_date):
+    """Create column in second position to store report_date."""
+    df.insert(1, 'Report Date', report_date)
+    return
+
+def check_premium_calcs(df_agg):
+    """Check that the sum of the earned premium and the unearned premium is equal to the pro-rata GWP."""
+    unequal_co = df_agg.loc[round(df_agg['Total Earned Premium'] + df_agg['Total Unearned Premium'], 1) != (round(df_agg['Total Pro-Rata GWP'], 1))]['Company Name']
+    if unequal_co.empty:
+        pass
+    else:
+        print('The sum of the earned and unearned total premium does not equal the Total Pro-Rata GWP.\n Check calculations for the following companies: ')
+        print(unequal_co)
+    
+def check_count_vins(df, df_agg):
+    """ Check that the sum of the total vehicles after grouping is equal to the number of cases in the original dataframe."""
+    unequal_vins = int(sum(df_agg['Total Count of Vehicles'])) != len(df)
+    if unequal_vins:
+        print('The sum of the total vehicles after grouping does not equal the length of the original dataframe.\n Check grouping.')
     
 def main():
     report_date = '2022-08-01'
     df = read_file()
     
     # your processing here
-    report_date = report_str_datetime(report_date)
     fix_data_entry_mistakes(df)
     calc_pro_rata_gwp(df)
     calc_earned_premium(df, report_date)
     calc_unearned_premium(df, report_date)
     calc_taxes(df)
-    report_date(df, report_date)
-    # aggregate(df)
+    df_agg = aggregate(df)
+    report_date_col(df_agg, report_date)
+    check_premium_calcs(df_agg)
+    check_count_vins(df, df_agg)
+    # end processing here
     
-    write_new_file(df, report_date)
+    write_new_file(df_agg, report_date)
     return 
+
+main()
